@@ -2,13 +2,9 @@ name: 更新双色球数据
 
 on:
   schedule:
-    # 每天 21:30 跑(北京时间)
+    # 每天 21:30 北京时间(13:30 UTC)
     - cron: '30 13 * * *'
   workflow_dispatch:
-  push:
-    paths:
-      - 'fetch_ssq.py'
-      - '.github/workflows/ssq-update.yml'
 
 jobs:
   fetch-ssq:
@@ -16,14 +12,20 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 尝试拉取数据
+      - name: 安装依赖
         run: |
-          pip install requests beautifulsoup4 2>/dev/null || true
-          python fetch_ssq.py || echo "拉取失败,保留现有数据"
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
+
+      - name: 拉取数据
+        run: |
+          python fetch_ssq.py
 
       - name: 提交更新
         run: |
@@ -31,9 +33,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ssq_data.json
           if git diff --staged --quiet; then
-            echo "无变化"
+            echo "无变化,无需提交"
           else
             PERIOD=$(python -c "import json; d=json.load(open('ssq_data.json')); print(d[-1].get('period', 'unknown') if d else 'empty')" 2>/dev/null || echo "unknown")
-            git commit -m "🔄 auto: $PERIOD"
+            git commit -m "auto: $PERIOD"
             git push
-          fi
