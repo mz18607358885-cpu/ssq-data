@@ -2,7 +2,6 @@ name: 更新双色球数据
 
 on:
   schedule:
-    # 每天 21:30 北京时间(13:30 UTC)
     - cron: '30 13 * * *'
   workflow_dispatch:
 
@@ -23,18 +22,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4
 
-      - name: 拉取数据
+      - name: 拉取并显示数据
         run: |
-          python fetch_ssq.py
+          python fetch_ssq.py || echo "拉取脚本失败,但继续"
+          if [ -f ssq_data.json ]; then
+            python -c "import json; d=json.load(open('ssq_data.json')); print(f'共 {len(d)} 期,最新 {d[-1][\"period\"] if d else \"空\"}')"
+          fi
 
-      - name: 提交更新
+      - name: 提交更新(失败也不影响)
+        continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ssq_data.json
           if git diff --staged --quiet; then
             echo "无变化,无需提交"
-          else
-            PERIOD=$(python -c "import json; d=json.load(open('ssq_data.json')); print(d[-1].get('period', 'unknown') if d else 'empty')" 2>/dev/null || echo "unknown")
-            git commit -m "auto: $PERIOD"
-            git push
+            exit 0
+          fi
+          PERIOD=$(python -c "import json; d=json.load(open('ssq_data.json')); print(d[-1].get('period', 'unknown') if d else 'empty')" 2>/dev/null || echo "unknown")
+          git commit -m "auto: $PERIOD" || echo "commit 失败"
+          git push || echo "push 失败(可能权限不够)"
+          echo "✅ 完成"
