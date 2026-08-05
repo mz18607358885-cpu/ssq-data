@@ -1,26 +1,34 @@
 name: 自动更新双色球数据
 on:
   schedule:
-    - cron: '30 13 * * 0,2,4'    # 21:30 北京
-    - cron: '0 14 * * *'         # 22:00 北京兜底
+    - cron: '0 14 * * 0,2,4'
   workflow_dispatch:
 jobs:
   fetch-ssq:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
-      - run: pip install requests beautifulsoup4
-      - name: 拉取数据
-        env: { JUHE_KEY: ${{ secrets.JUHE_KEY }} }
+        with:
+          python-version: '3.11'
+      - run: pip install requests --break-system-packages
+      - name: 拉取最新数据
         run: python fetch_ssq.py
       - name: 提交
-        env: { GH_PAT: ${{ secrets.GH_PAT }} }
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ssq_data.json
-          git diff --staged --quiet || git commit -m "auto: 更新 $(python -c 'import json; print(json.load(open(\"ssq_data.json\"))[-1][\"period\"])')"
-          git push https://x-access-token:${GH_PAT}@github.com/mz18607358885-cpu/ssq-data.git main
+          if git diff --cached --quiet; then
+            echo "✓ 无新数据"
+            exit 0
+          fi
+          MSG="auto: 更新到 $(python -c 'import json; d=json.load(open("ssq_data.json")); print(d[-1]["period"])')"
+          git commit -m "$MSG"
+          git push
+          echo "✓ push 成功"
