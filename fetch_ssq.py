@@ -1,196 +1,117 @@
 """
-双色球数据抓取脚本 v7 - 5 源兜底
+双色球数据抓取脚本 v10 - eastmoney 抓最新期
+依赖: pip install requests
 """
 import sys
-import json
 import os
+import json
+import re
+import subprocess
+from datetime import datetime
 
 try:
     import requests
-    from bs4 import BeautifulSoup
 except ImportError:
-    print("pip install needed", file=sys.stderr)
+    print("pip install requests --break-system-packages", file=sys.stderr)
     sys.exit(0)
 
-
-GITHUB_RAW = "https://raw.githubusercontent.com/mz18607358885-cpu/ssq-data/main/ssq_data.json"
-
-
-def normalize_period(p):
-    if not p: return ""
-    p = str(p).strip()
-    if len(p) == 5 and p.isdigit():
-        return "20" + p[:2] + p[2:]
-    if p.startswith("2026") and len(p) == 8:
-        return "2026" + p[4:]
-    return p
+GITHUB_REPO = os.environ.get('GH_REPO', 'mz18607358885-cpu/ssq-data')
+GITHUB_TOKEN = os.environ.get('GH_TOKEN', '').strip()
+DATA_FILE = 'ssq_data.json'
+EAST_MONEY_URL = 'http://caipiao.eastmoney.com/pub/result/category/ssq'
 
 
-def fetch_github():
+def fetch_existing_data():
+    urls = [
+        f'https://cdn.jsdelivr.net/gh/{GITHUB_REPO}@main/{DATA_FILE}',
+        f'https://raw.githubusercontent.com/{GITHUB_REPO}/main/{DATA_FILE}'
+    ]
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
+            if r.status_code == 200 and r.text.strip():
+                data = json.loads(r.text)
+                if isinstance(data, list) and data:
+                    norm = []
+                    for it in data:
+                        period = it.get('period') or it.get('p') or it.get('lottery_no') or ''
+                        reds = it.get('reds') or it.get('r') or []
+                        blue = it.get('blue') or it.get('b')
+                        date = it.get('date') or it.get('d') or ''
+                        if period and len(reds) == 6 and blue:
+                            p = str(period)
+                            if len(p) == 5 and p.isdigit():
+                                p = '20' + p
+                            norm.append({'period': p, 'reds': [int(x) for x in reds], 'blue': int(blue), 'date': str(date)[:10]})
+                    return norm
+        except Exception as e:
+            print(f'! {e}', file=sys.stderr)
+    return []
+
+
+def parse_eastmoney_html(html):
+    if not html or len(html) < 1000: return []
+    items = []
+    for m in re.finditer(r'<div id="(20\d{5})" class="tabs-panel[^"]*">([\s\S]*?)(?=<div id="20|<div class="tabs-content")', html):
+        issue = m.group(1); body = m.group(2)
+        date_match = re.search(r'开奖日期：(\d{4}-\d{2}-\d{2})', body)
+        date = date_match.group(1) if date_match else ''
+        reds = [int(rm.group(1)) for rm in re.finditer(r'pellet-primary pellet-lg red">(\d{2})</span>', body)]
+        blue_match = re.search(r'pellet-default pellet-lg blue">(\d{2})</span>', body)
+        blue = int(blue_match.group(1)) if blue_match else None
+        if len(reds) == 6 and blue and 1 <= blue <= 16:
+            items.append({'period': issue, 'reds': reds, 'blue': blue, 'date': date})
+    items.sort(key=lambda x: x['period'], reverse=True)
+    return items
+
+
+def fetch_eastmoney():
     try:
-        r = requests.get(GITHUB_RAW, timeout=20)
+        r = requests.get(EAST_MONEY_URL, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
         if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list) and len(data) > 0:
-                print(f"  [GitHub] 拉到 {len(data)} 期", file=sys.stderr)
-                return data
+            return parse_eastmoney_html(r.text)
     except Exception as e:
-        print(f"  [GitHub] 失败: {e}", file=sys.stderr)
+        print(f'! {e}', file=sys.stderr)
     return []
 
 
-def fetch_500():
-    url = "https://datachart.500.com/ssq/history/history.shtml"
-    try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-        r.encoding = r.apparent_encoding
-        if r.status_code != 200 or len(r.text) < 1000: return []
-        soup = BeautifulSoup(r.text, "html.parser")
-        tbody = soup.find("tbody", id="tdata")
-        if not tbody: return []
-        results = []
-        for tr in tbody.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) < 8: continue
-            period = normalize_period(tds[0].get_text(strip=True))
-            if not period.startswith("2026") or len(period) != 7: continue
-            try:
-                reds = [int(tds[i].get_text(strip=True)) for i in range(1, 7)]
-                blue = int(tds[7].get_text(strip=True))
-                if len(reds) != 6 or not (1 <= blue <= 16) or not all(1 <= r <= 33 for r in reds): continue
-                date = tds[15].get_text(strip=True) if len(tds) > 15 else ""
-                results.append({"period": period, "reds": reds, "blue": blue, "date": date})
-            except: continue
-        results.sort(key=lambda x: x["period"])
-        if results: print(f"  [500.com] 拉到 {len(results)} 期", file=sys.stderr)
-        return results
-    except Exception as e:
-        print(f"  [500.com] 失败: {e}", file=sys.stderr)
-        return []
-
-
-def fetch_sina():
-    url = "https://lotto.sina.cn/trend/qxc_qlc_proxy.d.html?lottoType=ssq&actionType=chzs&type=120"
-    try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-        r.encoding = r.apparent_encoding
-        if r.status_code != 200 or len(r.text) < 1000: return []
-        soup = BeautifulSoup(r.text, "html.parser")
-        cpdata = soup.find(id="cpdata")
-        if not cpdata: return []
-        results = []
-        for tr in cpdata.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) < 21: continue
-            period = tds[0].get_text(strip=True)
-            if not (period.startswith("20") and len(period) == 7): continue
-            reds = []
-            blue = None
-            for i, td in enumerate(tds):
-                cls = td.get("class")
-                cls_name = cls[0] if cls else ""
-                if cls_name in ("chartball01", "chartball20") and 4 <= i <= 38:
-                    try:
-                        v = int(td.get_text(strip=True))
-                        if 1 <= v <= 33: reds.append(v)
-                    except: pass
-                elif cls_name == "chartball02" and 40 <= i <= 55:
-                    try:
-                        v = int(td.get_text(strip=True))
-                        if 1 <= v <= 16 and blue is None: blue = v
-                    except: pass
-            if len(reds) == 6 and blue is not None:
-                results.append({"period": period, "reds": reds, "blue": blue, "date": ""})
-        results.sort(key=lambda x: x["period"])
-        if results: print(f"  [新浪] 拉到 {len(results)} 期", file=sys.stderr)
-        return results
-    except Exception as e:
-        print(f"  [新浪] 失败: {e}", file=sys.stderr)
-        return []
-
-
-def fetch_17500():
-    url = "https://www.17500.cn/ssq/all2009.php"
-    try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-        r.encoding = r.apparent_encoding
-        if r.status_code != 200 or len(r.text) < 1000: return []
-        soup = BeautifulSoup(r.text, "html.parser")
-        results = []
-        for tr in soup.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) < 8: continue
-            period = normalize_period(tds[0].get_text(strip=True))
-            if not period.startswith("2026") or len(period) != 7: continue
-            try:
-                reds = [int(tds[i].get_text(strip=True)) for i in range(1, 7)]
-                blue = int(tds[7].get_text(strip=True))
-                if len(reds) == 6 and 1 <= blue <= 16 and all(1 <= r <= 33 for r in reds):
-                    results.append({"period": period, "reds": reds, "blue": blue, "date": ""})
-            except: continue
-        seen = set()
-        unique = []
-        for r in results:
-            if r["period"] not in seen:
-                seen.add(r["period"])
-                unique.append(r)
-        unique.sort(key=lambda x: x["period"])
-        if unique: print(f"  [乐彩网] 拉到 {len(unique)} 期", file=sys.stderr)
-        return unique
-    except Exception as e:
-        print(f"  [乐彩网] 失败: {e}", file=sys.stderr)
-        return []
-
-
-def fetch_zhcw():
-    url = "https://www.zhcw.com/ssq/"
-    try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-        r.encoding = r.apparent_encoding
-        if r.status_code != 200 or len(r.text) < 1000: return []
-        soup = BeautifulSoup(r.text, "html.parser")
-        results = []
-        for table in soup.find_all("table"):
-            for tr in table.find_all("tr"):
-                tds = tr.find_all("td")
-                if len(tds) < 8: continue
-                period = normalize_period(tds[0].get_text(strip=True))
-                if not period.startswith("2026") or len(period) != 7: continue
-                try:
-                    reds = [int(tds[i].get_text(strip=True)) for i in range(1, 7)]
-                    blue = int(tds[7].get_text(strip=True))
-                    if len(reds) == 6 and 1 <= blue <= 16 and all(1 <= r <= 33 for r in reds):
-                        results.append({"period": period, "reds": reds, "blue": blue, "date": ""})
-                except: continue
-        if results:
-            seen = set()
-            unique = []
-            for r in results:
-                if r["period"] not in seen:
-                    seen.add(r["period"])
-                    unique.append(r)
-            unique.sort(key=lambda x: x["period"])
-            print(f"  [中彩网] 拉到 {len(unique)} 期", file=sys.stderr)
-            return unique
-    except Exception as e:
-        print(f"  [中彩网] 失败: {e}", file=sys.stderr)
-    return []
+def merge_data(existing, new_items):
+    by_period = {it['period']: it for it in existing}
+    added = updated = 0
+    for it in new_items:
+        p = it['period']
+        if p not in by_period: added += 1
+        elif by_period[p].get('reds') != it.get('reds') or by_period[p].get('blue') != it.get('blue'):
+            updated += 1
+        by_period[p] = it
+    return sorted(by_period.values(), key=lambda x: x['period']), added, updated
 
 
 def main():
-    print("v7 拉取数据中...", file=sys.stderr)
-    data = fetch_github() or fetch_500() or fetch_sina() or fetch_17500() or fetch_zhcw()
-    out_path = os.path.join(os.path.dirname(__file__), "ssq_data.json")
-    if data:
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"✅ 已写 {len(data)} 期,最新 {data[-1]['period']}", file=sys.stderr)
-    else:
-        print("⚠️ 5 源都失败,保留现有", file=sys.stderr)
-    return 0
+    print(f'=== {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} ===', file=sys.stderr)
+    existing = fetch_existing_data()
+    new_items = fetch_eastmoney()
+    if not new_items: sys.exit(0)
+    merged, added, updated = merge_data(existing, new_items)
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(merged, f, ensure_ascii=False, separators=(',', ':'))
+    print(f'+{added}新期, ~{updated}更新, 最新{merged[-1]["period"]}', file=sys.stderr)
+    # commit + push
+    try:
+        subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True, capture_output=True)
+        subprocess.run(['git', 'config', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True, capture_output=True)
+        subprocess.run(['git', 'add', DATA_FILE], check=True, capture_output=True)
+        diff = subprocess.run(['git', 'diff', '--cached', '--stat'], capture_output=True, text=True)
+        if not diff.stdout.strip():
+            print('✓ 无新数据', file=sys.stderr); return
+        msg = f"auto: 更新到 {merged[-1]['period']} (+{added}新期, ~{updated}更新)"
+        subprocess.run(['git', 'commit', '-m', msg], check=True, capture_output=True)
+        subprocess.run(['git', 'push'], check=True, capture_output=True)
+        print('✓ push 成功', file=sys.stderr)
+    except subprocess.CalledProcessError as e:
+        err = e.stderr.decode() if e.stderr else str(e)
+        print(f'! git 错误: {err}', file=sys.stderr)
 
 
-if __name__ == "__main__":
-    try: main()
-    except: pass
-    sys.exit(0)
+if __name__ == '__main__':
+    main()
