@@ -20,5 +20,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GIST_TOKEN }}
           GIST_ID: 2dd6663382955b90697ab6aec9c165c8
         run: |
-          curl -sL "https://gist.githubusercontent.com/mz18607358885-cpu/$GIST_ID/raw/fetch_ssq_v14.py" -o /tmp/v14.py
-          python3 /tmp/v14.py
+         curl -sL ".../fetch_ssq_v15.py" -o /tmp/v15.py
+python3 /tmp/v15.py
