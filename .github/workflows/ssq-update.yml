@@ -1,4 +1,4 @@
-name: SSQ Auto Update (v15)
+name: fetch_ssq_v16.py
 on:
   schedule:
     - cron: '* * * * *'
