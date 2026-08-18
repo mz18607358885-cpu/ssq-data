@@ -1,4 +1,4 @@
-name: fetch_ssq_v16.py
+name: SSQ Auto Update (v16)
 on:
   schedule:
     - cron: '* * * * *'
@@ -11,15 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-          - name: 抓数据 + 推 Gist (v16)
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: pip install requests --break-system-packages --quiet
+      - name: 抓数据 + 推 Gist (v16)
         env:
           GH_TOKEN: ${{ secrets.GIST_TOKEN }}
           GIST_ID: 2dd6663382955b90697ab6aec9c165c8
         run: |
-          curl -sL ".../fetch_ssq_v16.py" -o /tmp/v16.py
-          python3 /tmp/v16.py   ← 10 个空格
-          GH_TOKEN: ${{ secrets.GIST_TOKEN }}
-          GIST_ID: 2dd6663382955b90697ab6aec9c165c8
-        run: |
           curl -sL "https://gist.githubusercontent.com/mz18607358885-cpu/$GIST_ID/raw/fetch_ssq_v16.py" -o /tmp/v16.py
-python3 /tmp/v16.py
+          python3 /tmp/v16.py
